@@ -11,7 +11,8 @@ export const WaveformCanvas: React.FC<WaveformCanvasProps> = ({ audioAnalysis })
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !audioAnalysis.analyser) return;
+    const analyser = audioAnalysis.analyser;
+    if (!canvas || !analyser) return;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -20,7 +21,7 @@ export const WaveformCanvas: React.FC<WaveformCanvasProps> = ({ audioAnalysis })
       const width = canvas.width;
       const height = canvas.height;
 
-      audioAnalysis.analyser.getFloatTimeDomainData(audioAnalysis.timeData);
+      analyser.getFloatTimeDomainData(audioAnalysis.timeData);
 
       ctx.fillStyle = 'rgb(20, 20, 30)';
       ctx.fillRect(0, 0, width, height);

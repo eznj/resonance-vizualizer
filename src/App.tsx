@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useAudioEngine } from './hooks/useAudioEngine';
 import { OscillatorControls } from './components/OscillatorControls';
 import { WaveformCanvas } from './components/WaveformCanvas';

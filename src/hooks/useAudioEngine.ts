@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 
 export interface AudioAnalysis {
   analyser: AnalyserNode | null;
-  timeData: Float32Array;
-  frequencyData: Uint8Array;
+  timeData: Float32Array<ArrayBuffer>;
+  frequencyData: Uint8Array<ArrayBuffer>;
 }
 
 export function useAudioEngine(freq1: number, freq2: number, freq3: number, volume: number = 0.1) {

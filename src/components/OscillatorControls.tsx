@@ -1,5 +1,4 @@
 import React from 'react';
-import { PHI, calculateRatio, deviationFromPhi, isGoldenRatio } from '../utils/phi';
 
 interface OscillatorControlsProps {
   freq1: number;
@@ -31,7 +30,7 @@ export const OscillatorControls: React.FC<OscillatorControlsProps> = ({
   mode2,
   mode3,
   gain,
-  isPlaying,
+  isPlaying: _isPlaying,
   onFreq1Change,
   onFreq2Change,
   onFreq3Change,
@@ -40,28 +39,8 @@ export const OscillatorControls: React.FC<OscillatorControlsProps> = ({
   onMode2Change,
   onMode3Change,
   onGainChange,
-  onPlayPause,
+  onPlayPause: _onPlayPause,
 }) => {
-  const ratio12 = calculateRatio(freq1, freq2);
-  const ratio23 = calculateRatio(freq2, freq3);
-  const ratio13 = calculateRatio(freq1, freq3);
-  
-  const deviation12 = deviationFromPhi(ratio12);
-  const deviation23 = deviationFromPhi(ratio23);
-  const deviation13 = deviationFromPhi(ratio13);
-  
-  const isGolden12 = isGoldenRatio(ratio12);
-  const isGolden23 = isGoldenRatio(ratio23);
-  const isGolden13 = isGoldenRatio(ratio13);
-  const anyGolden = isGolden12 || isGolden23 || isGolden13;
-
-  const snapToGoldenRatio = () => {
-    const newFreq1 = freq2 * PHI;
-    const newFreq3 = freq2 / PHI;
-    onFreq1Change(Math.round(newFreq1 * 100) / 100);
-    onFreq3Change(Math.round(newFreq3 * 100) / 100);
-  };
-
   return (
     <div className="controls">
       <div className="controls-grid">

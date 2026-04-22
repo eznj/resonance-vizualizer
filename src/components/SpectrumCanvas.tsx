@@ -11,7 +11,8 @@ export const SpectrumCanvas: React.FC<SpectrumCanvasProps> = ({ audioAnalysis })
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !audioAnalysis.analyser) return;
+    const analyser = audioAnalysis.analyser;
+    if (!canvas || !analyser) return;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -20,27 +21,26 @@ export const SpectrumCanvas: React.FC<SpectrumCanvasProps> = ({ audioAnalysis })
       const width = canvas.width;
       const height = canvas.height;
 
-      audioAnalysis.analyser.getByteFrequencyData(audioAnalysis.frequencyData);
+      analyser.getByteFrequencyData(audioAnalysis.frequencyData);
 
       ctx.fillStyle = 'rgb(20, 20, 30)';
       ctx.fillRect(0, 0, width, height);
 
       // Calculate bins for -100 to 600Hz range display
-      const sampleRate = audioAnalysis.analyser.context.sampleRate;
+      const sampleRate = analyser.context.sampleRate;
       const nyquist = sampleRate / 2;
       const binCount = audioAnalysis.frequencyData.length;
       const hzPerBin = nyquist / binCount;
-      
+
       // Display range: -100 to 600Hz (total 700Hz range)
       const displayMin = -100;
       const displayMax = 600;
       const displayRange = displayMax - displayMin;
-      
+
       // Map the actual frequency data (0 to nyquist) to our display range
       const maxFreqIndex = Math.floor(600 / hzPerBin);
       const numBars = Math.min(maxFreqIndex, binCount);
-      
-      const barWidth = width / displayRange * 600; // Only use 600Hz of the 700Hz range for actual data
+
       const offsetX = width * (100 / displayRange); // Offset for the -100Hz padding
       
       // Fill the -100 to 0Hz range with baseline
