@@ -4,7 +4,7 @@
 import { useEffect, useRef } from 'react';
 import type { ResonanceEngine } from '../audio/ResonanceEngine';
 import type { Palette, PartialSpec } from '../types';
-import { fitCanvas, rgba } from '../visuals/palette';
+import { createSizer, rgba } from '../visuals/palette';
 
 export type SpectrumMode = 'area' | 'bars' | 'line';
 
@@ -29,10 +29,11 @@ export function SpectrumCanvas({ engine, partials, palette, mode }: Props) {
   useEffect(() => {
     const canvas = ref.current!;
     const ctx = canvas.getContext('2d')!;
+    const { size, dispose } = createSizer(canvas);
     let raf = 0;
 
     function frame() {
-      const { w: W, h: H, dpr } = fitCanvas(canvas);
+      const { w: W, h: H, dpr } = size;
       const pal = palRef.current;
       const spec = engine.getSpectrum();
       ctx.clearRect(0, 0, W, H);
@@ -42,7 +43,8 @@ export function SpectrumCanvas({ engine, partials, palette, mode }: Props) {
       const sr = engine.sampleRate();
       const FMAX = sr / 2;
       const bins = spec ? spec.length : 1024;
-      const xOf = (f: number) => (Math.log(f / FMIN) / Math.log(FMAX / FMIN)) * W;
+      const logSpan = Math.log(FMAX / FMIN);
+      const xOf = (f: number) => (Math.log(f / FMIN) / logSpan) * W;
 
       // frequency grid
       ctx.lineWidth = 1;
@@ -61,9 +63,10 @@ export function SpectrumCanvas({ engine, partials, palette, mode }: Props) {
         ctx.fillText(labels[g], gx + 4 * dpr, H - 4 * dpr);
       }
 
-      // build curve points
+      // build curve points, sampling every ~2 device px
+      const step = Math.max(1, Math.round(2 * dpr));
       const pts: [number, number][] = [];
-      for (let px = 0; px <= W; px += 1) {
+      for (let px = 0; px <= W; px += step) {
         const f = FMIN * Math.pow(FMAX / FMIN, px / W);
         let bin = Math.round((f * bins * 2) / sr);
         if (bin < 0) bin = 0;
@@ -76,11 +79,9 @@ export function SpectrumCanvas({ engine, partials, palette, mode }: Props) {
 
       const m = modeRef.current;
       if (m === 'bars') {
-        const step = Math.max(2 * dpr, 3 * dpr);
         ctx.fillStyle = rgba(pal.screenTrace, 0.85);
-        for (let bx = 0; bx < W; bx += step) {
-          const idx = Math.min(pts.length - 1, Math.round(bx));
-          const by = pts[idx][1];
+        for (let i = 0; i < pts.length; i++) {
+          const [bx, by] = pts[i];
           ctx.fillRect(bx, by, step - 1 * dpr, H - by);
         }
       } else {
@@ -132,8 +133,11 @@ export function SpectrumCanvas({ engine, partials, palette, mode }: Props) {
 
       raf = requestAnimationFrame(frame);
     }
-    frame();
-    return () => cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(raf);
+      dispose();
+    };
   }, [engine]);
 
   return <canvas ref={ref} />;

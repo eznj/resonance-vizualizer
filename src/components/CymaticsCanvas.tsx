@@ -2,12 +2,16 @@
    CymaticsCanvas — Chladni nodal-line field.
    Each active partial contributes a mode pair (n,m) derived from
    its ratio to the lowest active frequency. The field is only
-   recomputed when partials change; the draw loop breathes the
-   node threshold to animate.
+   recomputed when partials change.
+
+   Perf: the squared normalized field is precomputed once per
+   change; the per-pixel exp() is served from a lookup table; and
+   the redraw is throttled to ~30fps (the breathing is slow) and
+   skipped entirely when nothing is moving.
    ============================================================ */
 import { useEffect, useRef } from 'react';
 import type { Palette, PartialSpec } from '../types';
-import { fitCanvas, parseRGB, rgba } from '../visuals/palette';
+import { createSizer, parseRGB, rgba } from '../visuals/palette';
 
 interface Props {
   partials: PartialSpec[];
@@ -16,14 +20,32 @@ interface Props {
 }
 
 const GR = 180;
+const DRAW_INTERVAL = 1000 / 30;
+
+// exp(-x) lookup — x beyond EXP_XMAX is ~0.
+const EXP_XMAX = 16;
+const EXP_N = 2048;
+const EXP_LUT = new Float32Array(EXP_N + 1);
+for (let i = 0; i <= EXP_N; i++) EXP_LUT[i] = Math.exp(-(i / EXP_N) * EXP_XMAX);
+function expNeg(x: number): number {
+  if (x >= EXP_XMAX) return 0;
+  return EXP_LUT[((x / EXP_XMAX) * EXP_N) | 0];
+}
 
 export function CymaticsCanvas({ partials, palette, motion }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
-  const fieldRef = useRef<{ field: Float32Array; maxAbs: number } | null>(null);
+  // `norm[i]` = (|field| / maxAbs)² — the static part of the node falloff.
+  const normRef = useRef<Float32Array | null>(null);
+  const dirtyRef = useRef(true);
   const palRef = useRef(palette);
   palRef.current = palette;
   const motionRef = useRef(motion);
   motionRef.current = motion;
+
+  // a theme/palette change must repaint even a static (non-breathing) field
+  useEffect(() => {
+    dirtyRef.current = true;
+  }, [palette]);
 
   // signature → recompute the field only when params change
   const sig = partials
@@ -33,7 +55,8 @@ export function CymaticsCanvas({ partials, palette, motion }: Props) {
   useEffect(() => {
     const active = partials.filter((p) => !p.muted);
     if (active.length === 0) {
-      fieldRef.current = null;
+      normRef.current = null;
+      dirtyRef.current = true;
       return;
     }
     const f0 = Math.min(...active.map((p) => p.freq));
@@ -43,7 +66,7 @@ export function CymaticsCanvas({ partials, palette, motion }: Props) {
       const m = Math.max(1, Math.min(11, Math.round(1.7 * q) + 1));
       return { n, m, a: p.amp };
     });
-    const field = new Float32Array(GR * GR);
+    const norm = new Float32Array(GR * GR);
     let maxAbs = 1e-6;
     for (let yy = 0; yy < GR; yy++) {
       const y = yy / (GR - 1);
@@ -57,29 +80,47 @@ export function CymaticsCanvas({ partials, palette, motion }: Props) {
           const mPy = Math.cos(md.m * Math.PI * y);
           sum += md.a * (nPx * mPy + mPx * nPy);
         }
-        field[yy * GR + xx] = sum;
         const av = Math.abs(sum);
+        norm[yy * GR + xx] = av;
         if (av > maxAbs) maxAbs = av;
       }
     }
-    fieldRef.current = { field, maxAbs };
+    // normalize to (|field|/maxAbs)² in place
+    const invMax = 1 / maxAbs;
+    for (let i = 0; i < norm.length; i++) {
+      const r = norm[i] * invMax;
+      norm[i] = r * r;
+    }
+    normRef.current = norm;
+    dirtyRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sig]);
 
   useEffect(() => {
     const canvas = ref.current!;
     const ctx = canvas.getContext('2d')!;
+    const { size, dispose } = createSizer(canvas);
     const off = document.createElement('canvas');
     off.width = GR;
     off.height = GR;
     const octx = off.getContext('2d')!;
     const img = octx.createImageData(GR, GR);
     let raf = 0;
+    let lastDraw = -1e9;
     const t0 = performance.now();
 
     function frame(now: number) {
-      const { w: W, h: H } = fitCanvas(canvas);
-      const fr = fieldRef.current;
+      const moving = motionRef.current;
+      // throttle to ~30fps; when static, draw once then idle
+      if (now - lastDraw < DRAW_INTERVAL || (!moving && !dirtyRef.current)) {
+        raf = requestAnimationFrame(frame);
+        return;
+      }
+      lastDraw = now;
+      dirtyRef.current = false;
+
+      const { w: W, h: H } = size;
+      const norm = normRef.current;
       const pal = palRef.current;
       const bg = parseRGB(pal.screenBg);
       const sand = parseRGB(pal.screenTrace);
@@ -90,18 +131,17 @@ export function CymaticsCanvas({ partials, palette, motion }: Props) {
       const side = Math.min(W, H);
       const ox = (W - side) / 2;
       const oy = (H - side) / 2;
-      if (!fr) {
+      if (!norm) {
         raf = requestAnimationFrame(frame);
         return;
       }
-      // gentle breathing of node thickness
-      const breathe = motionRef.current ? 0.5 + 0.5 * Math.sin((now - t0) / 1400) : 0.5;
-      const thr = fr.maxAbs * (0.055 + 0.03 * breathe);
+      // breathing node thickness → scales the falloff
+      const breathe = moving ? 0.5 + 0.5 * Math.sin((now - t0) / 1400) : 0.5;
+      const k = 0.055 + 0.03 * breathe;
+      const inv = 1 / (k * k);
       const data = img.data;
-      const field = fr.field;
-      for (let i = 0; i < field.length; i++) {
-        const d = Math.abs(field[i]) / thr;
-        const node = Math.exp(-d * d); // 1 on nodal line → 0 away
+      for (let i = 0; i < norm.length; i++) {
+        const node = expNeg(norm[i] * inv); // 1 on nodal line → 0 away
         const o = i * 4;
         data[o] = bg[0] + (sand[0] - bg[0]) * node;
         data[o + 1] = bg[1] + (sand[1] - bg[1]) * node;
@@ -121,7 +161,10 @@ export function CymaticsCanvas({ partials, palette, motion }: Props) {
       raf = requestAnimationFrame(frame);
     }
     raf = requestAnimationFrame(frame);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      dispose();
+    };
   }, []);
 
   return <canvas ref={ref} />;

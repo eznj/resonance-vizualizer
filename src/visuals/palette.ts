@@ -59,15 +59,35 @@ export function parseRGB(str: string): [number, number, number] {
   return m ? [+m[0], +m[1], +m[2]] : [128, 128, 128];
 }
 
-/** Size a canvas to its box at capped DPR; returns device-pixel dims. */
-export function fitCanvas(canvas: HTMLCanvasElement): { w: number; h: number; dpr: number } {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const r = canvas.getBoundingClientRect();
-  const w = Math.max(1, Math.round(r.width * dpr));
-  const h = Math.max(1, Math.round(r.height * dpr));
-  if (canvas.width !== w || canvas.height !== h) {
-    canvas.width = w;
-    canvas.height = h;
-  }
-  return { w, h, dpr };
+export interface CanvasSize {
+  w: number;
+  h: number;
+  dpr: number;
+}
+
+/**
+ * Track a canvas's device-pixel size via ResizeObserver instead of measuring
+ * (getBoundingClientRect) every animation frame, which forces layout. The
+ * returned `size` object is mutated in place; read it inside the draw loop.
+ */
+export function createSizer(canvas: HTMLCanvasElement): { size: CanvasSize; dispose: () => void } {
+  const size: CanvasSize = { w: 1, h: 1, dpr: 1 };
+  const measure = () => {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const r = canvas.getBoundingClientRect();
+    const w = Math.max(1, Math.round(r.width * dpr));
+    const h = Math.max(1, Math.round(r.height * dpr));
+    size.w = w;
+    size.h = h;
+    size.dpr = dpr;
+    // setting width/height clears the canvas, so only do it on a real change
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+  };
+  measure();
+  const ro = new ResizeObserver(measure);
+  ro.observe(canvas);
+  return { size, dispose: () => ro.disconnect() };
 }
