@@ -1,123 +1,140 @@
-import React, { useEffect, useRef } from 'react';
-import { AudioAnalysis } from '../hooks/useAudioEngine';
+/* ============================================================
+   SpectrumCanvas — log-frequency FFT analyzer on the LCD palette
+   ============================================================ */
+import { useEffect, useRef } from 'react';
+import type { ResonanceEngine } from '../audio/ResonanceEngine';
+import type { Palette, PartialSpec } from '../types';
+import { fitCanvas, rgba } from '../visuals/palette';
 
-interface SpectrumCanvasProps {
-  audioAnalysis: AudioAnalysis;
+export type SpectrumMode = 'area' | 'bars' | 'line';
+
+interface Props {
+  engine: ResonanceEngine;
+  partials: PartialSpec[];
+  palette: Palette;
+  mode: SpectrumMode;
 }
 
-export const SpectrumCanvas: React.FC<SpectrumCanvasProps> = ({ audioAnalysis }) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animationRef = useRef<number>();
+const FMIN = 28;
+
+export function SpectrumCanvas({ engine, partials, palette, mode }: Props) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const partRef = useRef(partials);
+  partRef.current = partials;
+  const palRef = useRef(palette);
+  palRef.current = palette;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    const analyser = audioAnalysis.analyser;
-    if (!canvas || !analyser) return;
+    const canvas = ref.current!;
+    const ctx = canvas.getContext('2d')!;
+    let raf = 0;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    function frame() {
+      const { w: W, h: H, dpr } = fitCanvas(canvas);
+      const pal = palRef.current;
+      const spec = engine.getSpectrum();
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = pal.screenBg;
+      ctx.fillRect(0, 0, W, H);
 
-    const draw = () => {
-      const width = canvas.width;
-      const height = canvas.height;
+      const sr = engine.sampleRate();
+      const FMAX = sr / 2;
+      const bins = spec ? spec.length : 1024;
+      const xOf = (f: number) => (Math.log(f / FMIN) / Math.log(FMAX / FMIN)) * W;
 
-      analyser.getByteFrequencyData(audioAnalysis.frequencyData);
-
-      ctx.fillStyle = 'rgb(20, 20, 30)';
-      ctx.fillRect(0, 0, width, height);
-
-      // Calculate bins for -100 to 600Hz range display
-      const sampleRate = analyser.context.sampleRate;
-      const nyquist = sampleRate / 2;
-      const binCount = audioAnalysis.frequencyData.length;
-      const hzPerBin = nyquist / binCount;
-
-      // Display range: -100 to 600Hz (total 700Hz range)
-      const displayMin = -100;
-      const displayMax = 600;
-      const displayRange = displayMax - displayMin;
-
-      // Map the actual frequency data (0 to nyquist) to our display range
-      const maxFreqIndex = Math.floor(600 / hzPerBin);
-      const numBars = Math.min(maxFreqIndex, binCount);
-
-      const offsetX = width * (100 / displayRange); // Offset for the -100Hz padding
-      
-      // Fill the -100 to 0Hz range with baseline
-      ctx.fillStyle = 'rgba(30, 30, 40, 0.5)';
-      ctx.fillRect(0, 0, offsetX, height);
-      
-      // Draw frequency data from 0 to 600Hz
-      let x = offsetX;
-      const dataBarWidth = (width - offsetX) / numBars;
-
-      for (let i = 0; i < numBars; i++) {
-        const freq = i * hzPerBin;
-        if (freq > 600) break;
-        
-        // Scale bar height to use more of the available space (leave room for labels)
-        const maxBarHeight = height - 30; // Leave 30px for labels at bottom
-        const barHeight = (audioAnalysis.frequencyData[i] / 255) * maxBarHeight;
-
-        const r = (barHeight / maxBarHeight) * 255 + 25;
-        const g = 250 - (barHeight / maxBarHeight) * 255;
-        const b = 50;
-
-        const gradient = ctx.createLinearGradient(0, height - barHeight, 0, height);
-        gradient.addColorStop(0, `rgb(${r}, ${g}, ${b})`);
-        gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0.3)`);
-
-        ctx.fillStyle = gradient;
-        ctx.fillRect(x, height - barHeight - 25, dataBarWidth - 1, barHeight);
-
-        x += dataBarWidth;
+      // frequency grid
+      ctx.lineWidth = 1;
+      ctx.font = 10 * dpr + "px 'IBM Plex Mono', monospace";
+      ctx.textBaseline = 'bottom';
+      const marks = [100, 1000, 10000];
+      const labels = ['100', '1k', '10k'];
+      for (let g = 0; g < marks.length; g++) {
+        const gx = xOf(marks[g]);
+        ctx.strokeStyle = rgba(pal.screenGrid, 0.55);
+        ctx.beginPath();
+        ctx.moveTo(gx, 0);
+        ctx.lineTo(gx, H);
+        ctx.stroke();
+        ctx.fillStyle = rgba(pal.screenInk, 0.85);
+        ctx.fillText(labels[g], gx + 4 * dpr, H - 4 * dpr);
       }
 
-      // Labels and markers
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-      ctx.font = '10px monospace';
-      
-      // Main range labels
-      ctx.fillText('-100', 5, height - 5);
-      ctx.fillText('600', width - 25, height - 5);
-      
-      // Add frequency markers at 100Hz intervals
-      for (let freq = -100; freq <= 600; freq += 100) {
-        const xPos = ((freq - displayMin) / displayRange) * width;
-        if (freq >= 0 && freq !== 600) {
-          ctx.fillText(`${freq}`, xPos - 10, height - 5);
+      // build curve points
+      const pts: [number, number][] = [];
+      for (let px = 0; px <= W; px += 1) {
+        const f = FMIN * Math.pow(FMAX / FMIN, px / W);
+        let bin = Math.round((f * bins * 2) / sr);
+        if (bin < 0) bin = 0;
+        if (bin >= bins) bin = bins - 1;
+        let v = spec ? spec[bin] / 255 : 0;
+        v = Math.pow(v, 1.35);
+        const y = H - 6 * dpr - v * (H - 18 * dpr);
+        pts.push([px, y]);
+      }
+
+      const m = modeRef.current;
+      if (m === 'bars') {
+        const step = Math.max(2 * dpr, 3 * dpr);
+        ctx.fillStyle = rgba(pal.screenTrace, 0.85);
+        for (let bx = 0; bx < W; bx += step) {
+          const idx = Math.min(pts.length - 1, Math.round(bx));
+          const by = pts[idx][1];
+          ctx.fillRect(bx, by, step - 1 * dpr, H - by);
         }
-        
-        // Add vertical grid lines
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-        ctx.lineWidth = 1;
+      } else {
         ctx.beginPath();
-        ctx.moveTo(xPos, 0);
-        ctx.lineTo(xPos, height - 25);
+        ctx.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+        if (m === 'area') {
+          ctx.lineTo(W, H);
+          ctx.lineTo(0, H);
+          ctx.closePath();
+          const grad = ctx.createLinearGradient(0, 0, 0, H);
+          grad.addColorStop(0, rgba(pal.screenTrace, 0.42));
+          grad.addColorStop(1, rgba(pal.screenTrace, 0.03));
+          ctx.fillStyle = grad;
+          ctx.fill();
+          ctx.beginPath();
+          ctx.moveTo(pts[0][0], pts[0][1]);
+          for (let j = 1; j < pts.length; j++) ctx.lineTo(pts[j][0], pts[j][1]);
+        }
+        ctx.lineWidth = 1.5 * dpr;
+        ctx.strokeStyle = m === 'area' ? rgba(pal.screenTrace, 0.98) : rgba(pal.screenInk, 0.95);
+        ctx.lineJoin = 'round';
         ctx.stroke();
       }
-      
-      // Add Hz label
-      ctx.fillText('Hz', width / 2 - 10, height - 5);
 
-      animationRef.current = requestAnimationFrame(draw);
-    };
-
-    draw();
-
-    return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
+      // partial markers
+      const ps = partRef.current;
+      ctx.textBaseline = 'top';
+      for (let p = 0; p < ps.length; p++) {
+        const part = ps[p];
+        if (part.muted) continue;
+        const mx = xOf(part.freq);
+        ctx.strokeStyle = rgba(pal.screenTrace, 0.5);
+        ctx.lineWidth = 1 * dpr;
+        ctx.setLineDash([2 * dpr, 3 * dpr]);
+        ctx.beginPath();
+        ctx.moveTo(mx, 0);
+        ctx.lineTo(mx, H);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = pal.screenTrace;
+        ctx.beginPath();
+        ctx.arc(mx, 9 * dpr, 3 * dpr, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = rgba(pal.screenInk, 0.95);
+        ctx.font = 9.5 * dpr + "px 'IBM Plex Mono', monospace";
+        ctx.fillText(String(p + 1), mx + 5 * dpr, 4 * dpr);
       }
-    };
-  }, [audioAnalysis]);
 
-  return (
-    <canvas
-      ref={canvasRef}
-      width={240}
-      height={240}
-      className="visualization-canvas spectrum"
-    />
-  );
-};
+      raf = requestAnimationFrame(frame);
+    }
+    frame();
+    return () => cancelAnimationFrame(raf);
+  }, [engine]);
+
+  return <canvas ref={ref} />;
+}

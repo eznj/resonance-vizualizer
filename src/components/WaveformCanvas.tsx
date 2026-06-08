@@ -1,77 +1,93 @@
-import React, { useEffect, useRef } from 'react';
-import { AudioAnalysis } from '../hooks/useAudioEngine';
+/* ============================================================
+   WaveformCanvas — zero-crossing-stabilized oscilloscope
+   ============================================================ */
+import { useEffect, useRef } from 'react';
+import type { ResonanceEngine } from '../audio/ResonanceEngine';
+import type { Palette } from '../types';
+import { fitCanvas, rgba } from '../visuals/palette';
 
-interface WaveformCanvasProps {
-  audioAnalysis: AudioAnalysis;
+interface Props {
+  engine: ResonanceEngine;
+  palette: Palette;
+  skin: 'flat' | 'skeuo';
 }
 
-export const WaveformCanvas: React.FC<WaveformCanvasProps> = ({ audioAnalysis }) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animationRef = useRef<number>();
+export function WaveformCanvas({ engine, palette, skin }: Props) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const palRef = useRef(palette);
+  palRef.current = palette;
+  const skinRef = useRef(skin);
+  skinRef.current = skin;
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    const analyser = audioAnalysis.analyser;
-    if (!canvas || !analyser) return;
+    const canvas = ref.current!;
+    const ctx = canvas.getContext('2d')!;
+    let raf = 0;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    function frame() {
+      const { w: W, h: H, dpr } = fitCanvas(canvas);
+      const pal = palRef.current;
+      const crt = skinRef.current === 'skeuo';
+      const wave = engine.getWaveform();
 
-    const draw = () => {
-      const width = canvas.width;
-      const height = canvas.height;
+      ctx.fillStyle = pal.screenBg;
+      ctx.fillRect(0, 0, W, H);
+      const lineCol = pal.screenTrace;
+      const glowCol = rgba(pal.screenTrace, 0.6);
+      const gridCol = rgba(pal.screenGrid, 0.5);
 
-      analyser.getFloatTimeDomainData(audioAnalysis.timeData);
+      // grid 8×4
+      ctx.strokeStyle = gridCol;
+      ctx.lineWidth = 1;
+      const cols = 8;
+      const rows = 4;
+      for (let c = 1; c < cols; c++) {
+        const gx = (W * c) / cols;
+        ctx.beginPath();
+        ctx.moveTo(gx, 0);
+        ctx.lineTo(gx, H);
+        ctx.stroke();
+      }
+      for (let r = 1; r < rows; r++) {
+        const gy = (H * r) / rows;
+        ctx.beginPath();
+        ctx.moveTo(0, gy);
+        ctx.lineTo(W, gy);
+        ctx.stroke();
+      }
 
-      ctx.fillStyle = 'rgb(20, 20, 30)';
-      ctx.fillRect(0, 0, width, height);
-
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = 'rgb(100, 255, 200)';
-      ctx.beginPath();
-
-      const sliceWidth = width / audioAnalysis.timeData.length;
-      let x = 0;
-
-      for (let i = 0; i < audioAnalysis.timeData.length; i++) {
-        const v = audioAnalysis.timeData[i];
-        const y = (v + 1) / 2 * height;
-
-        if (i === 0) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
+      if (wave) {
+        const n = wave.length;
+        let start = 0;
+        for (let s = 1; s < n / 2; s++) {
+          if (wave[s - 1] < 128 && wave[s] >= 128) {
+            start = s;
+            break;
+          }
         }
-
-        x += sliceWidth;
+        const span = Math.floor(n / 2);
+        ctx.lineWidth = (crt ? 2.2 : 1.7) * dpr;
+        ctx.strokeStyle = lineCol;
+        ctx.lineJoin = 'round';
+        ctx.shadowColor = glowCol;
+        ctx.shadowBlur = (crt ? 9 : 5) * dpr;
+        ctx.beginPath();
+        for (let x = 0; x < W; x++) {
+          let idx = start + Math.floor((x / W) * span);
+          if (idx >= n) idx = n - 1;
+          const vy = (wave[idx] - 128) / 128;
+          const y = H / 2 - vy * (H / 2 - 6 * dpr);
+          if (x === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        ctx.shadowBlur = 0;
       }
+      raf = requestAnimationFrame(frame);
+    }
+    frame();
+    return () => cancelAnimationFrame(raf);
+  }, [engine]);
 
-      ctx.stroke();
-
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-      ctx.beginPath();
-      ctx.moveTo(0, height / 2);
-      ctx.lineTo(width, height / 2);
-      ctx.stroke();
-
-      animationRef.current = requestAnimationFrame(draw);
-    };
-
-    draw();
-
-    return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [audioAnalysis]);
-
-  return (
-    <canvas
-      ref={canvasRef}
-      width={240}
-      height={240}
-      className="visualization-canvas"
-    />
-  );
-};
+  return <canvas ref={ref} />;
+}

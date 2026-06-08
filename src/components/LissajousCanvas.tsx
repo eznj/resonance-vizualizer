@@ -1,115 +1,108 @@
-import React, { useEffect, useRef } from 'react';
-import { isGoldenRatio, calculateRatio } from '../utils/phi';
+/* ============================================================
+   LissajousCanvas — parametric trace x=sin(u+φ), y=sin(r·u).
+   r = f2/f1 of the first two active partials. Irrational r (φ)
+   never closes, so the figure precesses — that's the point.
+   ============================================================ */
+import { useEffect, useRef } from 'react';
+import type { Palette, PartialSpec } from '../types';
+import { fitCanvas, rgba } from '../visuals/palette';
 
-interface LissajousCanvasProps {
-  freq1: number;
-  freq2: number;
-  freq3: number;
+interface Props {
+  partials: PartialSpec[];
+  palette: Palette;
+  skin: 'flat' | 'skeuo';
+  motion: boolean;
 }
 
-export const LissajousCanvas: React.FC<LissajousCanvasProps> = ({ freq1, freq2, freq3 }) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animationRef = useRef<number>();
-  const phaseRef = useRef(0);
+export function LissajousCanvas({ partials, palette, skin, motion }: Props) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const palRef = useRef(palette);
+  palRef.current = palette;
+  const skinRef = useRef(skin);
+  skinRef.current = skin;
+  const motionRef = useRef(motion);
+  motionRef.current = motion;
+  const partRef = useRef(partials);
+  partRef.current = partials;
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const canvas = ref.current!;
+    const ctx = canvas.getContext('2d')!;
+    let raf = 0;
+    const t0 = performance.now();
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    function frame(now: number) {
+      const { w: W, h: H, dpr } = fitCanvas(canvas);
+      const pal = palRef.current;
+      const crt = skinRef.current === 'skeuo';
 
-    const width = canvas.width;
-    const height = canvas.height;
-    const centerX = width / 2;
-    const centerY = height / 2;
-    const scale = Math.min(width, height) * 0.4;
+      ctx.fillStyle = pal.screenBg;
+      ctx.fillRect(0, 0, W, H);
 
-    const ratio12 = calculateRatio(freq1, freq2);
-    const ratio23 = calculateRatio(freq2, freq3);
-    const ratio13 = calculateRatio(freq1, freq3);
-    const isGolden = isGoldenRatio(ratio12, 0.01) || isGoldenRatio(ratio23, 0.01) || isGoldenRatio(ratio13, 0.01);
+      const traceCol = pal.screenTrace;
+      const gridCol = rgba(pal.screenGrid, 0.5);
 
-    const draw = () => {
-      ctx.fillStyle = 'rgb(20, 20, 30)';
-      ctx.fillRect(0, 0, width, height);
-
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+      // crosshair
+      ctx.strokeStyle = gridCol;
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(0, centerY);
-      ctx.lineTo(width, centerY);
-      ctx.moveTo(centerX, 0);
-      ctx.lineTo(centerX, height);
+      ctx.moveTo(W / 2, 0);
+      ctx.lineTo(W / 2, H);
       ctx.stroke();
-
-      const points = [];
-      const numPoints = 3000;
-      const phaseShift = phaseRef.current;
-
-      for (let i = 0; i < numPoints; i++) {
-        const t = (i / numPoints) * Math.PI * 2 * 8;
-        const x = (Math.sin(freq1 * t / 100 + phaseShift) + Math.sin(freq3 * t / 100 + phaseShift * 1.5)) / 2;
-        const y = Math.sin(freq2 * t / 100);
-        points.push({ x, y });
-      }
-
-      ctx.strokeStyle = isGolden 
-        ? 'rgba(255, 215, 0, 0.8)'
-        : 'rgba(100, 255, 200, 0.8)';
-      ctx.lineWidth = isGolden ? 2 : 1.5;
-      
       ctx.beginPath();
-      points.forEach((point, i) => {
-        const x = centerX + point.x * scale;
-        const y = centerY + point.y * scale;
-        
-        if (i === 0) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
-        }
-      });
+      ctx.moveTo(0, H / 2);
+      ctx.lineTo(W, H / 2);
       ctx.stroke();
 
-      if (isGolden) {
-        ctx.strokeStyle = 'rgba(255, 215, 0, 0.3)';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, scale * 1.1, 0, Math.PI * 2);
-        ctx.stroke();
+      const ps = partRef.current.filter((p) => !p.muted);
+      const f1 = ps[0] ? ps[0].freq : 200;
+      const f2 = ps[1] ? ps[1].freq : f1 * 1.618;
+      const ratio = f2 / f1;
+
+      const phase = motionRef.current ? (now - t0) / 2600 : 0.6;
+      const cx = W / 2;
+      const cy = H / 2;
+      const R = Math.min(W, H) * 0.4;
+      const CYCLES = 28;
+      const STEPS = 2600;
+      const TAU = Math.PI * 2;
+
+      ctx.lineWidth = (crt ? 1.7 : 1.4) * dpr;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.shadowColor = rgba(pal.screenTrace, 0.55);
+      ctx.shadowBlur = (crt ? 7 : 4) * dpr;
+
+      let prevX = 0;
+      let prevY = 0;
+      for (let i = 0; i <= STEPS; i++) {
+        const u = (i / STEPS) * CYCLES * TAU;
+        const x = cx + R * Math.sin(u + phase);
+        const y = cy + R * Math.sin(ratio * u);
+        if (i > 0) {
+          const a = 0.1 + 0.62 * (i / STEPS); // tail → head
+          ctx.strokeStyle = rgba(traceCol, a);
+          ctx.beginPath();
+          ctx.moveTo(prevX, prevY);
+          ctx.lineTo(x, y);
+          ctx.stroke();
+        }
+        prevX = x;
+        prevY = y;
       }
+      ctx.shadowBlur = 0;
 
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-      ctx.font = '12px monospace';
-      ctx.fillText(`f₁: ${freq1.toFixed(1)} Hz`, 10, 20);
-      ctx.fillText(`f₂: ${freq2.toFixed(1)} Hz`, 10, 35);
-      ctx.fillText(`f₃: ${freq3.toFixed(1)} Hz`, 10, 50);
-      if (isGolden) {
-        ctx.fillStyle = 'rgba(255, 215, 0, 1)';
-        ctx.fillText('φ resonance', 10, 65);
-      }
+      // leading dot
+      ctx.fillStyle = traceCol;
+      ctx.beginPath();
+      ctx.arc(prevX, prevY, 2.4 * dpr, 0, TAU);
+      ctx.fill();
 
-      phaseRef.current += 0.01;
+      raf = requestAnimationFrame(frame);
+    }
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
-      animationRef.current = requestAnimationFrame(draw);
-    };
-
-    draw();
-
-    return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [freq1, freq2, freq3]);
-
-  return (
-    <canvas
-      ref={canvasRef}
-      width={240}
-      height={240}
-      className="visualization-canvas lissajous"
-    />
-  );
-};
+  return <canvas ref={ref} />;
+}

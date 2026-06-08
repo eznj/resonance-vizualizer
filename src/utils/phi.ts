@@ -1,19 +1,42 @@
-export const PHI = (1 + Math.sqrt(5)) / 2;
-export const PHI_RECIPROCAL = 1 / PHI;
+import type { PartialSpec } from '../types';
 
-export function calculateRatio(f1: number, f2: number): number {
-  if (f2 === 0) return 0;
-  return f1 / f2;
+export const PHI = (1 + Math.sqrt(5)) / 2; // 1.6180339887…
+
+/** Usable oscillator frequency range. */
+export const FMIN = 40;
+export const FMAX = 1800;
+
+export function clampF(f: number): number {
+  return Math.max(FMIN, Math.min(FMAX, f));
 }
 
-export function deviationFromPhi(ratio: number): number {
-  return Math.abs(ratio - PHI);
+/** A golden stack of n partials: base, base·φ, base·φ² … with a tapering amp. */
+export function phiSet(n: number, base: number): PartialSpec[] {
+  const arr: PartialSpec[] = [];
+  for (let i = 0; i < n; i++) {
+    arr.push({
+      freq: clampF(base * Math.pow(PHI, i)),
+      amp: 0.95 * Math.pow(0.82, i),
+      type: 'sine',
+      muted: false,
+    });
+  }
+  return arr;
 }
 
-export function isGoldenRatio(ratio: number, tolerance: number = 0.01): boolean {
-  return deviationFromPhi(ratio) < tolerance;
-}
-
-export function getNearestPhiRatio(baseFreq: number, targetRatio: 'phi' | 'phi_reciprocal'): number {
-  return targetRatio === 'phi' ? baseFreq * PHI : baseFreq * PHI_RECIPROCAL;
+/** Grow or shrink a stack to n partials, extending along the φ stack. */
+export function adjustCount(prev: PartialSpec[], n: number): PartialSpec[] {
+  if (n === prev.length) return prev;
+  if (n < prev.length) return prev.slice(0, n);
+  const arr = prev.slice();
+  const base = prev[0] ? prev[0].freq : 110;
+  for (let i = prev.length; i < n; i++) {
+    arr.push({
+      freq: clampF(base * Math.pow(PHI, i)),
+      amp: 0.95 * Math.pow(0.82, i),
+      type: 'sine',
+      muted: false,
+    });
+  }
+  return arr;
 }
